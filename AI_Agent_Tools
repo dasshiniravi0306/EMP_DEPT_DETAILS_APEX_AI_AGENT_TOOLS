@@ -1,0 +1,235 @@
+1. Retrieve Data tools (SQL Query)
+
+Name : get_employee_by_id
+Execution Point: On Demand
+Description: "Look up one employee's full record by employee number (EMPNO)."
+Parameters: P_EMPNO — NUMBER, required
+SQL Query:
+
+SELECT empno, ename, job, mgr, hiredate, sal, comm, deptno
+FROM   emp_d
+WHERE  empno = :P_EMPNO
+/
+
+Name : search_employees
+Execution Point: On Demand
+Description: "Search employees by partial name, job title, and/or department. Any parameter can be left null."
+Parameters: P_NAME VARCHAR2 (optional), P_JOB VARCHAR2 (optional), P_DEPTNO NUMBER (optional)
+SQL Query:
+
+SELECT empno, ename, job, mgr, hiredate, sal, comm, deptno
+FROM   emp_d
+WHERE  (:P_NAME   IS NULL OR UPPER(ename) LIKE '%'||UPPER(:P_NAME)||'%')
+AND    (:P_JOB    IS NULL OR UPPER(job)   =  UPPER(:P_JOB))
+AND    (:P_DEPTNO IS NULL OR deptno       =  :P_DEPTNO)
+ORDER  BY ename
+/
+
+Name : list_departments
+Execution Point: Augment System Prompt (small, cheap, useful context up front)
+Description: "Full list of departments — id, name, location."
+Parameters: none
+SQL Query:
+
+SELECT deptno, dname, loc FROM dept_d ORDER BY deptno
+/
+
+Name : get_department_salary_summary
+Execution Point: On Demand
+Description: "Headcount and salary stats (avg/min/max, total commission) for one department, or all departments if DEPTNO is null."
+Parameters: P_DEPTNO NUMBER (optional)
+SQL Query:
+
+SELECT d.deptno, d.dname,
+       COUNT(e.empno)               AS headcount,
+       ROUND(AVG(e.sal), 2)         AS avg_sal,
+       MIN(e.sal)                   AS min_sal,
+       MAX(e.sal)                   AS max_sal,
+       SUM(NVL(e.comm, 0))          AS total_comm
+FROM   dept_d d
+LEFT   JOIN emp_d e ON e.deptno = d.deptno
+WHERE  (:P_DEPTNO IS NULL OR d.deptno = :P_DEPTNO)
+GROUP  BY d.deptno, d.dname
+ORDER  BY d.deptno
+/
+
+
+2. Retrieve Data tool (Function Body returning CLOB)
+
+Name : get_org_chart
+Execution Point: On Demand
+Description: "Text-tree organization chart showing manager → direct-report relationships across all employees."
+Parameters: none
+Function Body (returns CLOB):
+
+DECLARE
+  l_result CLOB;
+BEGIN
+  FOR r IN (
+    SELECT LPAD(' ', (LEVEL - 1) * 2) || ename || ' — ' || job AS line
+    FROM   emp_d
+    START WITH mgr IS NULL
+    CONNECT BY PRIOR empno = mgr
+    ORDER SIBLINGS BY ename
+  ) LOOP
+    l_result := l_result || r.line || CHR(10);
+  END LOOP;
+  RETURN l_result;
+END;
+/
+
+3. Execute Server-side Code tools (PL/SQL) — full CRUD
+
+Name : create_employee
+Execution Point: On Demand
+Description: "Hire a new employee. HIREDATE format is YYYY-MM-DD; defaults to today if omitted."
+Parameters:
+P_EMPNO - NUMBER - Required
+P_ENAME - VARCHAR2 -Required 
+P_JOB - VARCHAR2 - Required
+P_MGR - NUMBER - Optional
+P_HIREDATE - VARCHAR2 - Optional
+P_SAL -NUMBER -Required
+P_COMM - NUMBER -Optional
+P_DEPTNO- NUMBER -Required
+
+
+PL/SQL Code:
+
+BEGIN
+  INSERT INTO emp_d (empno, ename, job, mgr, hiredate, sal, comm, deptno)
+  VALUES (:P_EMPNO, :P_ENAME, :P_JOB, :P_MGR,
+          NVL(TO_DATE(:P_HIREDATE, 'YYYY-MM-DD'), TRUNC(SYSDATE)),
+          :P_SAL, :P_COMM, :P_DEPTNO);
+END;
+/
+
+Name : update_employee_salary
+Description: "Change an employee's salary and, optionally, commission."
+Parameters: 
+P_EMPNO - NUMBER - Required
+P_NEW_SAL - NUMBER - Required
+P_NEW_COMM - NUMBER - Optional
+
+PL/SQL Code:
+
+BEGIN
+  UPDATE emp_d
+  SET    sal  = :P_NEW_SAL,
+         comm = NVL(:P_NEW_COMM, comm)
+  WHERE  empno = :P_EMPNO;
+
+  IF SQL%ROWCOUNT = 0 THEN
+    apex_ai.set_tool_result('No employee found with EMPNO ' || :P_EMPNO, p_success => FALSE);
+  END IF;
+END;
+/
+
+Name : transfer_employee
+Description: "Move an employee to a different department and, optionally, reassign their manager."
+Parameters: 
+P_EMPNO - NUMBER - required
+P_NEW_DEPTNO - NUMBER - Required
+P_NEW_MGR - NUMBER - Optional
+PL/SQL Code:
+
+BEGIN
+  UPDATE emp_d
+  SET    deptno = :P_NEW_DEPTNO,
+         mgr    = NVL(:P_NEW_MGR, mgr)
+  WHERE  empno  = :P_EMPNO;
+END;
+/
+
+
+Name : delete_employee
+Description: "Permanently remove an employee record. Destructive — confirm with the user first."
+Requires Confirmation: Yes — Title: "Delete Employee", Message: "This permanently removes the employee record. Continue?"
+Parameters: 
+P_EMPNO - NUMBER - Required
+PL/SQL Code:
+
+BEGIN
+  DELETE FROM emp_d WHERE empno = :P_EMPNO;
+  IF SQL%ROWCOUNT = 0 THEN
+    apex_ai.set_tool_result('No employee found with EMPNO ' || :P_EMPNO, p_success => FALSE);
+  END IF;
+END;
+/
+
+Name : create_department
+Description: "Create a new department."
+Parameters: 
+P_DEPTNO - NUMBER - Required
+P_DNAME - VARCHAR2 - Required
+P_LOC - VARCHAR2 - Optional
+
+PL/SQL Code:
+
+BEGIN
+  INSERT INTO dept_d (deptno, dname, loc) VALUES (:P_DEPTNO, :P_DNAME, :P_LOC);
+END;
+/
+
+Name : update_department
+Description: "Rename a department or change its location."
+Parameters: 
+P_DEPTNO - NUMBER - Required
+P_DNAME - VARCHAR2 - Optional
+P_LOC - VARCHAR2 - Optional
+PL/SQL Code:
+
+BEGIN
+  UPDATE dept_d
+  SET    dname = NVL(:P_DNAME, dname),
+         loc   = NVL(:P_LOC, loc)
+  WHERE  deptno = :P_DEPTNO;
+END;
+/
+
+Name : delete_department
+Description: "Delete a department. Blocked if employees are still assigned to it."
+Requires Confirmation: Yes — Title: "Delete Department", Message: "This permanently removes the department. Continue?"
+Parameters: 
+P_DEPTNO - NUMBER - Required
+PL/SQL Code:
+
+DECLARE
+  l_cnt NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO l_cnt FROM emp_d WHERE deptno = :P_DEPTNO;
+  IF l_cnt > 0 THEN
+    apex_ai.set_tool_result(
+      l_cnt || ' employee(s) are still assigned to this department. Reassign or remove them first.',
+      p_success => FALSE);
+  ELSE
+    DELETE FROM dept_d WHERE deptno = :P_DEPTNO;
+  END IF;
+END;
+/
+
+
+4. Execute Client-side Code tool (JavaScript)
+
+Name : confirm_destructive_action
+Type: Execute Client-side Code
+Description: "Shows a browser confirmation dialog before any delete tool runs. Always call this before delete_employee or delete_department and only proceed if the result is confirmed = true."
+Parameters: P_MESSAGE VARCHAR2 (required)
+JavaScript Code:
+
+
+javascriptreturn new Promise((resolve) => {
+  apex.message.confirm(this.data.P_MESSAGE, function(okPressed) {
+    resolve({ confirmed: okPressed });
+  });
+});
+
+
+Suggested Routing Instructions (on the AI Agent, not per-tool)
+
+Always call list_departments and get_department_salary_summary before answering
+questions about department headcount or pay.
+Before calling delete_employee or delete_department, first call
+confirm_destructive_action and only proceed if confirmed = true.
+Never fabricate EMPNO or DEPTNO values — look them up with search_employees or
+list_departments first if the user doesn't provide them.
